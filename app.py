@@ -1,5 +1,8 @@
 from flask import Flask, request, jsonify
 import requests
+import re
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
 
 app = Flask(__name__)
 
@@ -7,15 +10,36 @@ app = Flask(__name__)
 # CONFIGURAÇÕES
 # ==================================================
 
-GOOGLE_CHAT_WEBHOOK_URL = "https://chat.googleapis.com/v1/spaces/AAQAaEaO3xU/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=N7jM9c673N5AaThrs3XLUaRxH3iaoYnzD7Kok9dv-dI"
-
-API_TOKEN = "7b468a4d212b9a56888de85994e639f93505fe4c"
+API_TOKEN = "SEU_TOKEN_PIPEDRIVE"
 BASE_URL = "https://api.pipedrive.com/v1"
 PIPEDRIVE_DOMAIN = "https://bng.pipedrive.com"
 
+# GOOGLE CHAT API
+SERVICE_ACCOUNT_FILE = "service_account.json"
+GOOGLE_CHAT_SPACE = "spaces/AAQAaEaO3xU"
+SCOPES = ["https://www.googleapis.com/auth/chat.bot"]
+
+# MAPA PIPEDRIVE USER → GOOGLE CHAT USER
+USER_MAP = {
+    "123456": "users/11111111111111111111",  # Allan exemplo
+}
 
 # ==================================================
-# FUNÇÕES DE API
+# AUTENTICAÇÃO GOOGLE
+# ==================================================
+
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE,
+    scopes=SCOPES
+)
+
+def refresh_token():
+    credentials.refresh(Request())
+    return credentials.token
+
+
+# ==================================================
+# FUNÇÕES PIPEDRIVE API
 # ==================================================
 
 def carregar_stages():
@@ -51,8 +75,35 @@ def gerar_link_deal(deal_id):
 
 
 # ==================================================
-# GOOGLE CHAT — CARD AVANÇADO
+# GOOGLE CHAT - ENVIO
 # ==================================================
+
+def enviar_google_chat(payload):
+    token = refresh_token()
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(
+        f"https://chat.googleapis.com/v1/{GOOGLE_CHAT_SPACE}/messages",
+        headers=headers,
+        json=payload,
+        timeout=10
+    )
+
+    print("📨 Google Chat:", response.status_code)
+    if response.status_code >= 400:
+        print("❌ Erro Google Chat:", response.text)
+
+
+def enviar_mensagem_com_mencao(google_user_id, texto, link):
+    payload = {
+        "text": f"<{google_user_id}> {texto}\n{link}"
+    }
+    enviar_google_chat(payload)
+
 
 def enviar_google_chat_card(
     titulo,
@@ -70,33 +121,28 @@ def enviar_google_chat_card(
                 "card": {
                     "header": {
                         "title": titulo,
-                        "subtitle": subtitulo,
-                        "imageUrl": "https://cdn-icons-png.flaticon.com/512/5968/5968853.png"
+                        "subtitle": subtitulo
                     },
                     "sections": [
                         {
                             "widgets": [
                                 {
                                     "decoratedText": {
-                                        "startIcon": {"knownIcon": "MAP_PIN"},
                                         "text": f"<b>Pipeline:</b> {pipeline}"
                                     }
                                 },
                                 {
                                     "decoratedText": {
-                                        "startIcon": {"knownIcon": "BOOKMARK"},
                                         "text": f"<b>Etapa:</b> {etapa}"
                                     }
                                 },
                                 {
                                     "decoratedText": {
-                                        "startIcon": {"knownIcon": "STAR"},
                                         "text": f"<b>Status:</b> {status}"
                                     }
                                 },
                                 {
                                     "decoratedText": {
-                                        "startIcon": {"knownIcon": "DOLLAR"},
                                         "text": f"<b>Valor:</b> R$ {valor}"
                                     }
                                 },
@@ -104,7 +150,7 @@ def enviar_google_chat_card(
                                     "buttonList": {
                                         "buttons": [
                                             {
-                                                "text": "🔗 Abrir negócio",
+                                                "text": "Abrir negócio",
                                                 "onClick": {
                                                     "openLink": {
                                                         "url": link
@@ -122,19 +168,11 @@ def enviar_google_chat_card(
         ]
     }
 
-    response = requests.post(
-        GOOGLE_CHAT_WEBHOOK_URL,
-        json=payload,
-        timeout=10
-    )
-
-    print("📨 Google Chat:", response.status_code)
-    if response.status_code >= 400:
-        print("❌ Erro Google Chat:", response.text)
+    enviar_google_chat(payload)
 
 
 # ==================================================
-# CACHE GLOBAL (CARREGA NA INICIALIZAÇÃO)
+# CACHE GLOBAL
 # ==================================================
 
 STAGES_MAP = carregar_stages()
@@ -154,10 +192,38 @@ def webhook_pipedrive():
     data = payload.get("data", {})
     previous = payload.get("previous") or {}
 
-    if meta.get("entity") != "deal":
+    entity = meta.get("entity")
+    action = meta.get("action")
+
+    # ==================================================
+    # MENÇÃO EM NOTA
+    # ==================================================
+    if entity == "note" and action == "create":
+
+        content = data.get("content", "")
+        mencoes = re.findall(r'@\[(\d+):([^\]]+)\]', content)
+
+        for user_id, nome in mencoes:
+            if user_id in USER_MAP:
+
+                google_user = USER_MAP[user_id]
+                deal_id = data.get("deal_id")
+                deal_link = gerar_link_deal(deal_id) if deal_id else PIPEDRIVE_DOMAIN
+
+                enviar_mensagem_com_mencao(
+                    google_user,
+                    f"Você foi mencionado no Pipedrive 🚨",
+                    deal_link
+                )
+
+        return jsonify({"status": "ok"}), 200
+
+    # ==================================================
+    # DEALS
+    # ==================================================
+    if entity != "deal":
         return jsonify({"status": "ignored"}), 200
 
-    action = meta.get("action")
     deal_id = meta.get("entity_id")
     deal_link = gerar_link_deal(deal_id)
 
@@ -171,26 +237,19 @@ def webhook_pipedrive():
         f"Stage {data.get('stage_id')}"
     )
 
-    # ==========================
-    # 🆕 DEAL CRIADO
-    # ==========================
     if action == "create":
         enviar_google_chat_card(
-            titulo="🆕 Novo negócio criado",
-            subtitulo=data.get("title"),
-            pipeline=pipeline_name,
-            etapa=stage_name,
-            status=data.get("status"),
-            valor=data.get("value"),
-            link=deal_link
+            "🆕 Novo negócio criado",
+            data.get("title"),
+            pipeline_name,
+            stage_name,
+            data.get("status"),
+            data.get("value"),
+            deal_link
         )
 
-    # ==========================
-    # 🔄 DEAL ALTERADO
-    # ==========================
     elif action == "change":
 
-        # 🔄 Mudança de etapa
         if previous.get("stage_id") != data.get("stage_id"):
             prev_stage_name = STAGES_MAP.get(
                 previous.get("stage_id"),
@@ -198,51 +257,46 @@ def webhook_pipedrive():
             )
 
             enviar_google_chat_card(
-                titulo="🔄 Negócio mudou de etapa",
-                subtitulo=data.get("title"),
-                pipeline=pipeline_name,
-                etapa=f"{prev_stage_name} → {stage_name}",
-                status=data.get("status"),
-                valor=data.get("value"),
-                link=deal_link
+                "🔄 Negócio mudou de etapa",
+                data.get("title"),
+                pipeline_name,
+                f"{prev_stage_name} → {stage_name}",
+                data.get("status"),
+                data.get("value"),
+                deal_link
             )
 
-        # 🎉 GANHO
         if previous.get("status") != data.get("status") and data.get("status") == "won":
             enviar_google_chat_card(
-                titulo="🎉 Negócio GANHO!",
-                subtitulo=data.get("title"),
-                pipeline=pipeline_name,
-                etapa=stage_name,
-                status="Ganho",
-                valor=data.get("value"),
-                link=deal_link
+                "🎉 Negócio GANHO!",
+                data.get("title"),
+                pipeline_name,
+                stage_name,
+                "Ganho",
+                data.get("value"),
+                deal_link
             )
 
-        # ❌ PERDIDO
         if previous.get("status") != data.get("status") and data.get("status") == "lost":
             enviar_google_chat_card(
-                titulo="❌ Negócio PERDIDO",
-                subtitulo=data.get("title"),
-                pipeline=pipeline_name,
-                etapa=stage_name,
-                status="Perdido",
-                valor=data.get("value"),
-                link=deal_link
+                "❌ Negócio PERDIDO",
+                data.get("title"),
+                pipeline_name,
+                stage_name,
+                "Perdido",
+                data.get("value"),
+                deal_link
             )
 
-    # ==========================
-    # ❌ DEAL DELETADO
-    # ==========================
     elif action == "delete":
         enviar_google_chat_card(
-            titulo="🗑️ Negócio removido",
-            subtitulo=data.get("title", "Não disponível"),
-            pipeline=pipeline_name,
-            etapa=stage_name,
-            status="Removido",
-            valor=data.get("value", 0),
-            link=deal_link
+            "🗑️ Negócio removido",
+            data.get("title", "Não disponível"),
+            pipeline_name,
+            stage_name,
+            "Removido",
+            data.get("value", 0),
+            deal_link
         )
 
     return jsonify({"status": "ok"}), 200
