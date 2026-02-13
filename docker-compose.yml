@@ -1,0 +1,20 @@
+version: '3.9'
+
+services:
+
+  app:
+    build: .
+    container_name: webhook_pipedrive
+    ports:
+      - "5000:5000"
+    restart: always
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: ngrok_tunnel
+    restart: always
+    command: http app:5000
+    environment:
+      - NGROK_AUTHTOKEN=cr_38LFWUaV7KtwaGlrORduCtvOtYT
+    ports:
+      - "4040:4040"

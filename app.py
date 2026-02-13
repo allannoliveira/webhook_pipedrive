@@ -8,11 +8,7 @@ app = Flask(__name__)
 # CONFIGURAÇÕES
 # ==================================================
 
-GOOGLE_CHAT_WEBHOOK_URL = "I"
 
-API_TOKEN = ""
-BASE_URL = "https://api.pipedrive.com/api/v1"
-PIPEDRIVE_DOMAIN = "https://bng.pipedrive.com"
 
 
 # ==================================================
@@ -70,19 +66,72 @@ def gerar_link_deal(deal_id):
 def enviar_chat(texto):
     requests.post(GOOGLE_CHAT_WEBHOOK_URL, json={"text": texto})
 
+def enviar_mencao(nome_usuario, edital_nome, link):
 
-def enviar_card(titulo, edital_nome, etapa, pipeline, valor, link, status=None, etapa_anterior=None):
+    payload = {
+        "cardsV2": [{
+            "cardId": "mencao",
+            "card": {
+                "sections": [
+                    {
+                        "widgets": [
+
+                            # 🔔 Título
+                            {
+                                "textParagraph": {
+                                    "text": "<b><font color='#00009B'>🔔 MENÇÃO EM NEGÓCIO</font></b>"
+                                }
+                            },
+
+                            # 👤 Usuário
+                            {
+                                "decoratedText": {
+                                    "startIcon": {"knownIcon": "PERSON"},
+                                    "text": f"<b>{nome_usuario}</b> foi mencionado"
+                                }
+                            },
+
+                            # 📄 Nome do edital
+                            {
+                                "textParagraph": {
+                                    "text": f"<b>{edital_nome}</b>"
+                                }
+                            },
+
+                            # 🔗 Botão
+                            {
+                                "buttonList": {
+                                    "buttons": [{
+                                        "text": "🔗 Abrir no Pipedrive",
+                                        "onClick": {
+                                            "openLink": {"url": link}
+                                        }
+                                    }]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }]
+    }
+
+    requests.post(GOOGLE_CHAT_WEBHOOK_URL, json=payload)
+
+
+def enviar_card(titulo, edital_nome, etapa, pipeline, valor, link, status=None, etapa_anterior=None, motivo=None):
 
     # =============================
     # 🎨 CORES INTELIGENTES
     # =============================
-    cor_titulo = "#00009B"  # Azul BNG padrão
+    cor_titulo = "#00009B"
 
     if status == "won":
-        cor_titulo = "#0F9D58"  # Verde
+        cor_titulo = "#0F9D58"
         titulo = "🏆 NEGÓCIO GANHO"
+
     elif status == "lost":
-        cor_titulo = "#D93025"  # Vermelho
+        cor_titulo = "#D93025"
         titulo = "❌ NEGÓCIO PERDIDO"
 
     # =============================
@@ -93,87 +142,70 @@ def enviar_card(titulo, edital_nome, etapa, pipeline, valor, link, status=None, 
     except:
         valor_formatado = f"R$ {valor}"
 
-    # 🚨 Destaque para alto valor
     destaque_valor = ""
     if float(valor or 0) >= 100000:
         destaque_valor = " 🚨 ALTO VALOR"
 
-    # 🏆 Emoji especial para licitação
     emoji_pipeline = "🏛️" if "LICITA" in pipeline.upper() else "📊"
 
-    # 🔄 Mostrar mudança de etapa
     if etapa_anterior:
         etapa = f"{etapa_anterior} ➜ {etapa}"
 
+    # =============================
+    # 📝 BLOCO MOTIVO (se perdido)
+    # =============================
+    motivo_widget = []
+
+    if status == "lost" and motivo:
+        motivo_widget = [{
+            "textParagraph": {
+                "text": f"📝 <b>Motivo:</b> {motivo}"
+            }
+        }]
+
+    # =============================
+    # 📦 PAYLOAD
+    # =============================
     payload = {
         "cardsV2": [{
             "cardId": "deal",
             "card": {
-                "header": {
-                    "title": f"🔷 {titulo}",
-                    "subtitle": "BNG Hub • Gestão de Oportunidades"
-                },
-                "sections": [
+                "sections": [{
+                    "widgets": [
 
-                    # 🔵 Nome do edital
-                    {
-                        "widgets": [{
+                        {
                             "textParagraph": {
-                                "text": f"""
-                                <b>
-                                <font color="{cor_titulo}" size="+1">
-                                {edital_nome}
-                                </font>
-                                </b>
-                                """
+                                "text": f"<b> {titulo}</b>"
                             }
-                        }]
-                    },
+                        },
 
-                    {
-                        "widgets": [{
+                        {
                             "textParagraph": {
-                                #"text": "────────────────────────"
+                                "text": f"<b><font color='{cor_titulo}'>{edital_nome}</font></b>"
                             }
-                        }]
-                    },
+                        },
 
-                    {
-                        "widgets": [
-
-                            {
-                                "decoratedText": {
-                                    "startIcon": {"knownIcon": "BOOKMARK"},
-                                    "text": f"<b>Pipeline:</b> {emoji_pipeline} {pipeline}"
-                                }
-                            },
-
-                            {
-                                "decoratedText": {
-                                    "startIcon": {"knownIcon": "DESCRIPTION"},
-                                    "text": f"<b>Etapa:</b> {etapa}"
-                                }
-                            },
-
-                            {
-                                "decoratedText": {
-                                    "startIcon": {"knownIcon": "DOLLAR"},
-                                    "text": f"<b>Valor:</b> {valor_formatado}{destaque_valor}"
-                                }
-                            }
-                        ]
-                    },
-
-                    {
-                        "widgets": [{
+                        {
                             "textParagraph": {
-                               # "text": "────────────────────────"
+                                "text": f"📌 <b>Pipeline:</b> {emoji_pipeline} {pipeline}"
                             }
-                        }]
-                    },
+                        },
 
-                    {
-                        "widgets": [{
+                        {
+                            "textParagraph": {
+                                "text": f"📍 <b>Etapa:</b> {etapa}"
+                            }
+                        },
+
+                        {
+                            "textParagraph": {
+                                "text": f"💰 <b>Valor:</b> {valor_formatado}{destaque_valor}"
+                            }
+                        },
+
+                        *motivo_widget,
+
+                        {
                             "buttonList": {
                                 "buttons": [{
                                     "text": "🔗 Abrir no Pipedrive",
@@ -182,9 +214,9 @@ def enviar_card(titulo, edital_nome, etapa, pipeline, valor, link, status=None, 
                                     }
                                 }]
                             }
-                        }]
-                    }
-                ]
+                        }
+                    ]
+                }]
             }
         }]
     }
@@ -209,6 +241,13 @@ print("USUÁRIOS CARREGADOS:", USERS)
 CHAT_NAME_MAP = {
     "25457357": "@Alex Rocha",
     "25478587": "@Pedro Santana",
+    "25402929": "@Jheniffer Barros",
+    "25478587": "@Pedro Santana",
+    "25370655": "@Rafael Prates",
+    "25406878": "@Raquel Dias",
+    "25416305": "@Silvio Possa",
+    "25438459": "@Vanessa Assis",
+    "25457368": "@William Cavalari",
 }
 
 @app.route("/webhook/pipedrive", methods=["POST"])
@@ -243,7 +282,12 @@ def webhook():
                     USERS.get(user_id, f"Usuário {user_id}")
                 )
 
-                enviar_chat(f"🚨 {nome_final} foi mencionado no negócio:\n{link}")
+                enviar_mencao(
+                    nome_final,
+                    data.get("deal_title", "Negócio"),
+                    link
+                )
+
 
         return jsonify(ok=True)
 
@@ -276,6 +320,7 @@ def webhook():
 
     elif action == "change":
 
+        # Mudança de etapa
         if previous.get("stage_id") != data.get("stage_id"):
             enviar_card(
                 "🔄 Negócio mudou de etapa",
@@ -288,29 +333,33 @@ def webhook():
                 etapa_anterior=STAGES.get(previous.get("stage_id"))
             )
 
-        if previous.get("status") != data.get("status"):
+        # Negócio ganho
+        if data.get("status") == "won" and previous.get("status") != "won":
+            enviar_card(
+                "🎉 Negócio GANHO",
+                data.get("title"),
+                etapa,
+                pipeline,
+                valor,
+                link,
+                status="won"
+            )
 
-            if data.get("status") == "won":
-                enviar_card(
-                    "🎉 Negócio GANHO",
-                    data.get("title"),
-                    etapa,
-                    pipeline,
-                    valor,
-                    link,
-                    status="won"
-                )
+        # Negócio perdido
+        if data.get("status") == "lost" and previous.get("status") != "lost":
 
-            if data.get("status") == "lost":
-                enviar_card(
-                    "❌ Negócio PERDIDO",
-                    data.get("title"),
-                    etapa,
-                    pipeline,
-                    valor,
-                    link,
-                    status="lost"
-                )
+            motivo = data.get("lost_reason") or "Não informado"
+
+            enviar_card(
+                "❌ Negócio PERDIDO",
+                data.get("title"),
+                etapa,
+                pipeline,
+                valor,
+                link,
+                status="lost",
+                motivo=motivo
+            )
 
     elif action == "delete":
         enviar_chat(f"🗑️ Negócio removido: {link}")
